@@ -1,15 +1,15 @@
 import os
 from tablib import Dataset
 from im_export.resources import InsureeResource
-from core.services import create_or_update_core_user, create_or_update_interactive_user
 from django.test import TestCase
-from location.test_helpers import create_test_location
+from location.test_helpers import create_test_location, create_basic_test_locations
+from core.test_helpers import create_test_interactive_user
+from insuree.test_helpers import create_test_gender, create_test_insuree
 from django.conf import settings
 from location.models import Location
 _TEST_USER_NAME = "test_insuree_import"
 _TEST_USER_PWD = "test_insuree_import"
 _TEST_DATA_USER = {
-    "username": _TEST_USER_NAME,
     "last_name": _TEST_USER_NAME,
     "password": _TEST_USER_PWD,
     "other_names": _TEST_USER_NAME,
@@ -38,12 +38,14 @@ _TEST_LOCATIONS = [
 class ImportInsureeTest(TestCase):
 
     def setUp(self) -> None:
-
+        create_basic_test_locations()
+        create_test_gender()
+        for i in range(0, 10, 1):
+            create_test_insuree(custom_props={'chfid': f"54656844{i}"})
+        
         super(ImportInsureeTest, self).setUp()
-        self.i_user, i_user_created = create_or_update_interactive_user(
-            user_id=None, data=_TEST_DATA_USER, audit_user_id=999, connected=False)
-        self.user, user_created = create_or_update_core_user(
-            user_uuid=None, username=_TEST_DATA_USER["username"], i_user=self.i_user)
+
+        self.user = create_test_interactive_user(username=_TEST_USER_NAME, custom_props=_TEST_DATA_USER)
         test_location = _TEST_LOCATIONS
 
         for locations in test_location:
