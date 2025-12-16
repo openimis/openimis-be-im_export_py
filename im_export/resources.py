@@ -1,11 +1,12 @@
 from django.db.models import Q
-
+from django.utils.translation import gettext as _
 from core.datetimes.ad_datetime import datetime
 from im_export.apps import ImportExportConfig
 from insuree.models import Insuree, Family, Gender
 from location.models import Location
-
+import logging
 from import_export import fields, resources, widgets
+logger = logging.getLogger(__name__)
 
 
 class CharRequiredWidget(widgets.CharWidget):
@@ -94,7 +95,7 @@ def validate_and_preprocess(dataset):
 
     insuree_no_seen = set()
 
-    # we don't process 
+    # we don't process
     for idx, row in enumerate(dataset.dict, start=1):
         row_str = ''.join([str(col or '') for col in row])
         if row_str.strip() == '':
@@ -223,7 +224,6 @@ class InsureeResource(resources.ModelResource):
         instance.current_village_id = row['village_id']
         if not instance.id:
             instance.card_issued = False
-        
 
         if not instance.head:
             family = Family.objects.all().filter(validity_to__isnull=True) \
@@ -238,7 +238,7 @@ class InsureeResource(resources.ModelResource):
         # important to be at the end
         super().import_obj(instance, row, dry_run, **kwargs)
 
-    def after_save_instance(self, instance, row,  **kwargs):
+    def after_save_instance(self, instance, row, **kwargs):
         super().after_save_instance(instance, row, **kwargs)
         if instance.head:
             # if not using_transactions and dry_run this code will cause changes in database on dry run
@@ -246,6 +246,7 @@ class InsureeResource(resources.ModelResource):
                 instance.family = self.create_family(instance)
                 instance.current_village = None
                 instance.save()
+
     def before_save_instance(self, instance, row, **kwargs):
         if hasattr(instance, 'audit_user_id'):
             if self._user and self._user._u.id:
@@ -253,7 +254,7 @@ class InsureeResource(resources.ModelResource):
             else:
                 instance.audit_user_id = -1
                 logger.warning(_("im_export.save_without_user"))
-        
+
     def create_family(self, instance):
         return Family.objects.create(**{
             'validity_from': datetime.now(),

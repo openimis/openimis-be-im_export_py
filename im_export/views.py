@@ -2,15 +2,12 @@ import json
 import logging
 from django.http import HttpResponse, JsonResponse
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from insuree.apps import InsureeConfig
 from .services import InsureeImportExportService
 from core.views import check_user_rights
 
 logger = logging.getLogger(__name__)
-
-
 
 
 @api_view(["POST"])

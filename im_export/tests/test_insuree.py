@@ -5,7 +5,6 @@ from django.test import TestCase
 from location.test_helpers import create_test_location, create_basic_test_locations
 from core.test_helpers import create_test_interactive_user
 from insuree.test_helpers import create_test_gender, create_test_insuree
-from django.conf import settings
 from location.models import Location
 _TEST_USER_NAME = "test_insuree_import"
 _TEST_USER_PWD = "test_insuree_import"
@@ -42,7 +41,7 @@ class ImportInsureeTest(TestCase):
         create_test_gender()
         for i in range(0, 10, 1):
             create_test_insuree(custom_props={'chfid': f"54656844{i}"})
-        
+
         super(ImportInsureeTest, self).setUp()
 
         self.user = create_test_interactive_user(username=_TEST_USER_NAME, custom_props=_TEST_DATA_USER)
@@ -61,7 +60,7 @@ class ImportInsureeTest(TestCase):
         region = Location.objects.all() \
             .filter(validity_to__isnull=True) \
             .filter(name='Batha Region', type='R').first()
-        if not region:  
+        if not region:
             region = create_test_location('R', custom_props={'name': 'Batha Region', 'code': 'R99'})
         district = Location.objects.all() \
             .filter(validity_to__isnull=True) \
@@ -78,10 +77,10 @@ class ImportInsureeTest(TestCase):
             .filter(name='Batha', type='V', parent=ward).first()
         if not village:
             village = create_test_location('V', custom_props={'name': 'Boua', 'code': 'R99D1M1V', 'parent': ward})
-        
+
         dir_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
         resource = InsureeResource(user=self.user)
-        #with Patch("ImportExportConfig.im_export_date_format", '%m/%d/%Y')
+        # with Patch("ImportExportConfig.im_export_date_format", '%m/%d/%Y')
         with open(os.path.join(dir_path, 'tests/import_example.csv'), 'r') as f:
             imported_data = resource \
                 .validate_and_sort_dataset(Dataset(headers=InsureeResource.insuree_headers).load(f.read()))
@@ -94,4 +93,3 @@ class ImportInsureeTest(TestCase):
     def test_simple_export(self):
         result = InsureeResource(self.user).export().dict
         self.assertTrue(result)
-

@@ -89,7 +89,7 @@ class InsureeImportExportService:
             'invalid': result.totals['invalid'],
             'failed': result.totals['error']
         }
-        
+
     @staticmethod
     def _get_general_error(*args):
         errors = []
