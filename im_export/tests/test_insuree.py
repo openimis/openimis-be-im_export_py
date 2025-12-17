@@ -6,6 +6,7 @@ from location.test_helpers import create_test_location, create_basic_test_locati
 from core.test_helpers import create_test_interactive_user
 from insuree.test_helpers import create_test_gender, create_test_insuree
 from location.models import Location
+from core.test_helpers import create_admin_role
 _TEST_USER_NAME = "test_insuree_import"
 _TEST_USER_PWD = "test_insuree_import"
 _TEST_DATA_USER = {
@@ -14,7 +15,7 @@ _TEST_DATA_USER = {
     "other_names": _TEST_USER_NAME,
     "user_types": "INTERACTIVE",
     "language": "en",
-    "roles": [1, 5, 9],
+    "roles": [create_admin_role().id],
 }
 
 # all location used in the test files must use those name
