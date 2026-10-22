@@ -42,10 +42,7 @@ class InsureeImportExportService:
         if strategy not in self.supported_strategies:
             return self._get_general_error(f'Non-supported strategy: {strategy}')
 
-        # Other strategies are not supported for now
-        if strategy in (InsureeImportExportService.Strategy.UPDATE, InsureeImportExportService.Strategy.INSERT_UPDATE):
-            strategy = InsureeImportExportService.Strategy.INSERT
-            logger.warning(f'Strategy {strategy} not currently supported, defaulting to {InsureeImportExportService.Strategy.INSERT}')
+        self._resource.strategy = strategy
 
         try:
             if import_file.content_type == 'application/vnd.ms-excel':

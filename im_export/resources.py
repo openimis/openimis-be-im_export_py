@@ -200,52 +200,104 @@ class InsureeResource(resources.ModelResource):
         readonly=True
     )
 
-    def __init__(self, user, queryset=None, ):
+    # Import strategies, see InsureeImportExportService.Strategy.
+    STRATEGY_INSERT = 'INSERT'
+    STRATEGY_UPDATE = 'UPDATE'
+    STRATEGY_INSERT_UPDATE = 'INSERT_UPDATE'
+
+    def __init__(self, user, queryset=None, strategy=STRATEGY_INSERT):
         """
         @param user: User to be used for location rights for import and export, and for audit_user_id
         @param queryset: Queryset to use for export, Default to full quetyset
+        @param strategy: INSERT (new insurees only), UPDATE (existing only) or INSERT_UPDATE
         """
         super().__init__()
         self._queryset = queryset
         self._user = user
+        self.strategy = strategy
 
     @classmethod
     def validate_and_sort_dataset(cls, dataset):
         validate_and_preprocess(dataset)
         return dataset.sort('head', reverse=True)
 
-    def after_import_instance(self, instance, new, **kwargs):
-        # for now editing is disabled
+    # --- export ---------------------------------------------------------------
+
+    @staticmethod
+    def _effective_village(insuree):
+        # A member that lives at the family's location has no current_village of its own.
+        if insuree.current_village_id:
+            return insuree.current_village
+        return insuree.family.location if insuree.family_id else None
+
+    @classmethod
+    def _village_ancestor_name(cls, insuree, depth):
+        location = cls._effective_village(insuree)
+        for _level in range(depth):
+            location = location.parent if location else None
+        return location.name if location else ''
+
+    def dehydrate_village(self, insuree):
+        return self._village_ancestor_name(insuree, 0)
+
+    def dehydrate_municipality(self, insuree):
+        return self._village_ancestor_name(insuree, 1)
+
+    def dehydrate_district(self, insuree):
+        return self._village_ancestor_name(insuree, 2)
+
+    def dehydrate_region(self, insuree):
+        return self._village_ancestor_name(insuree, 3)
+
+    # --- import ---------------------------------------------------------------
+
+    def after_init_instance(self, instance, new, row, **kwargs):
+        super().after_init_instance(instance, new, row, **kwargs)
+        if new and self.strategy == self.STRATEGY_UPDATE:
+            raise ValueError(_("Insuree %(insuree_number)s does not exist") % {"insuree_number": row['insuree_number']})
+        if not new and self.strategy == self.STRATEGY_INSERT:
+            raise ValueError(_("Insuree %(insuree_number)s already exists") % {"insuree_number": row['insuree_number']})
         if not new:
-            raise ValueError("Insuree number already exists")
+            family_head = instance.family.head_insuree.chf_id if instance.family_id else None
+            if family_head != row['head_insuree_number']:
+                raise ValueError(_("Moving insuree %(insuree_number)s to another family is not supported")
+                                 % {"insuree_number": row['insuree_number']})
+            if bool(instance.head) != bool(row['head']):
+                raise ValueError(_("Changing the head of the family of insuree %(insuree_number)s is not supported")
+                                 % {"insuree_number": row['insuree_number']})
 
-    def import_obj(self, instance, row, dry_run, **kwargs):
-        instance.head = row['head']
-        instance.current_village_id = row['village_id']
+    def import_instance(self, instance, row, **kwargs):
+        # Family moves of an existing head, applied in do_instance_save.
+        instance._im_export_family_location_id = None
         if not instance.id:
+            instance.head = row['head']
+            instance.current_village_id = row['village_id']
             instance.card_issued = False
-
-        if not instance.head:
-            family = Family.objects.all().filter(validity_to__isnull=True) \
-                .select_related('location') \
-                .get(head_insuree__chf_id=row['head_insuree_number'])
-            instance.family = family
-            family_location = family.location
-            # if the current village is the same as head's, skip the current_location
-            if family_location.id == row['village_id']:
-                instance.current_village_id = None
+            if not instance.head:
+                family = Family.objects.all().filter(validity_to__isnull=True) \
+                    .select_related('location') \
+                    .get(head_insuree__chf_id=row['head_insuree_number'])
+                instance.family = family
+                # a member living at the family's location keeps no current_village
+                if family.location_id == row['village_id']:
+                    instance.current_village_id = None
+        elif instance.head:
+            # The head's location is the family's location.
+            if instance.family.location_id != row['village_id']:
+                instance._im_export_family_location_id = row['village_id']
+        else:
+            instance.current_village_id = None if instance.family.location_id == row['village_id'] \
+                else row['village_id']
 
         # important to be at the end
-        super().import_obj(instance, row, dry_run, **kwargs)
+        super().import_instance(instance, row, **kwargs)
 
-    def after_save_instance(self, instance, row, **kwargs):
-        super().after_save_instance(instance, row, **kwargs)
-        if instance.head:
-            # if not using_transactions and dry_run this code will cause changes in database on dry run
-            if not kwargs.get('using_transactions', False) or not kwargs.get('dry_run', False):
-                instance.family = self.create_family(instance)
-                instance.current_village = None
-                instance.save()
+    def skip_row(self, instance, original, row, import_validation_errors=None):
+        if original is None or import_validation_errors:
+            return False
+        compared = ('last_name', 'other_names', 'dob', 'gender_id', 'current_village_id')
+        return all(getattr(instance, f) == getattr(original, f) for f in compared) \
+            and instance._im_export_family_location_id is None
 
     def before_save_instance(self, instance, row, **kwargs):
         if hasattr(instance, 'audit_user_id'):
@@ -254,6 +306,27 @@ class InsureeResource(resources.ModelResource):
             else:
                 instance.audit_user_id = -1
                 logger.warning(_("im_export.save_without_user"))
+
+    def do_instance_save(self, instance, is_create):
+        # Only called when the row is really written (not on a dry run without transactions).
+        if not is_create:
+            # save_history copies the object it is called on: copy the stored version, read
+            # through _base_manager because Insuree.objects may answer from a cache that
+            # already holds the modified instance.
+            Insuree._base_manager.get(id=instance.id).save_history()
+            instance.validity_from = datetime.now()
+        instance.save()
+        if is_create and instance.head:
+            instance.family = self.create_family(instance)
+            instance.current_village = None
+            instance.save()
+        elif instance._im_export_family_location_id:
+            family = Family._base_manager.get(id=instance.family_id)
+            family.save_history()
+            family.location_id = instance._im_export_family_location_id
+            family.validity_from = datetime.now()
+            family.audit_user_id = instance.audit_user_id
+            family.save()
 
     def create_family(self, instance):
         return Family.objects.create(**{
