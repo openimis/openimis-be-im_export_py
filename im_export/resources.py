@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.utils.translation import gettext as _
 from core.datetimes.ad_datetime import datetime
@@ -81,15 +82,7 @@ def validate_and_preprocess(dataset):
     # a village can have homonyms therefore the parent must be taken into account
     # check if head insuree
     # check if insuree number is unique
-    regions = dict()
-    districts = dict()
-    municipalities = dict()
-    villages = dict()
-
-    regions_ids = list()
-    districts_ids = list()
-    municipalities_ids = list()
-    villages_ids = list()
+    # the locations are checked per row, see InsureeResource.before_import_row
     head = list()
     empty_indices = list()
 
@@ -101,14 +94,6 @@ def validate_and_preprocess(dataset):
         if row_str.strip() == '':
             empty_indices.append(idx)
         else:
-            # Check locations
-            region_id, district_id, municipality_id, village_id = \
-                get_locations_ids(row, regions, districts, municipalities, villages)
-            regions_ids.append(region_id)
-            districts_ids.append(district_id)
-            municipalities_ids.append(municipality_id)
-            villages_ids.append(village_id)
-
             insuree_number = row['insuree_number']
             if insuree_number not in insuree_no_seen:
                 insuree_no_seen.add(insuree_number)
@@ -125,10 +110,6 @@ def validate_and_preprocess(dataset):
         raise ValueError('There are duplicates of insurance number in the list')
 
     dataset.append_col(head, 'head')
-    dataset.append_col(villages_ids, 'village_id')
-    dataset.append_col(municipalities_ids, 'municipality_id')
-    dataset.append_col(districts_ids, 'district_id')
-    dataset.append_col(regions_ids, 'region_id')
 
 
 class InsureeResource(resources.ModelResource):
@@ -221,6 +202,9 @@ class InsureeResource(resources.ModelResource):
         validate_and_preprocess(dataset)
         return dataset.sort('head', reverse=True)
 
+    # Export column of each location type.
+    LOCATION_TYPE_COLUMNS = {'V': 'village', 'W': 'municipality', 'D': 'district', 'R': 'region'}
+
     # --- export ---------------------------------------------------------------
 
     @staticmethod
@@ -231,25 +215,41 @@ class InsureeResource(resources.ModelResource):
         return insuree.family.location if insuree.family_id else None
 
     @classmethod
-    def _village_ancestor_name(cls, insuree, depth):
+    def _location_name(cls, insuree, column):
+        # The location can be above village level (e.g. a family at W): place each ancestor in the
+        # column of its type, the columns below the location stay empty.
         location = cls._effective_village(insuree)
-        for _level in range(depth):
-            location = location.parent if location else None
+        while location and cls.LOCATION_TYPE_COLUMNS.get(location.type) != column:
+            location = location.parent
         return location.name if location else ''
 
     def dehydrate_village(self, insuree):
-        return self._village_ancestor_name(insuree, 0)
+        return self._location_name(insuree, 'village')
 
     def dehydrate_municipality(self, insuree):
-        return self._village_ancestor_name(insuree, 1)
+        return self._location_name(insuree, 'municipality')
 
     def dehydrate_district(self, insuree):
-        return self._village_ancestor_name(insuree, 2)
+        return self._location_name(insuree, 'district')
 
     def dehydrate_region(self, insuree):
-        return self._village_ancestor_name(insuree, 3)
+        return self._location_name(insuree, 'region')
 
     # --- import ---------------------------------------------------------------
+
+    def before_import(self, dataset, **kwargs):
+        super().before_import(dataset, **kwargs)
+        # location ids already looked up, per level: {region, district, municipality, village}
+        self._locations_cache = (dict(), dict(), dict(), dict())
+
+    def before_import_row(self, row, **kwargs):
+        super().before_import_row(row, **kwargs)
+        # An unknown location makes this row invalid, the other rows are still imported.
+        try:
+            row['region_id'], row['district_id'], row['municipality_id'], row['village_id'] = \
+                get_locations_ids(row, *self._locations_cache)
+        except ValueError as e:
+            raise ValidationError(str(e))
 
     def after_init_instance(self, instance, new, row, **kwargs):
         super().after_init_instance(instance, new, row, **kwargs)

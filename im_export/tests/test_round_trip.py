@@ -135,3 +135,54 @@ class InsureeRoundTripTest(TestCase):
             dry_run=True, strategy=Strategy.UPDATE)
         self.assertFalse(success)
         self.assertTrue(any("another family" in e for e in errors), errors)
+
+
+class InsureeLocationColumnsTest(TestCase):
+    """OCM-700: location columns follow the location type, and a bad location only rejects its row."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_interactive_user(
+            username="test_im_export_loc_cols",
+            custom_props={"roles": [create_admin_role().id]},
+        )
+        self.service = InsureeImportExportService(self.user)
+        self.village = create_test_village()
+
+    def _export_rows(self):
+        _, data = self.service.export_insurees("csv")
+        return {row["insuree_number"]: row for row in csv.DictReader(io.StringIO(data))}
+
+    def test_export_of_a_family_above_village_level_keeps_the_columns_by_type(self):
+        municipality = self.village.parent
+        self.assertEqual(municipality.type, "W")
+        head = create_test_insuree(
+            is_head=True, custom_props={"chf_id": "700000101"}, family_custom_props={"location": municipality})
+        # The insuree lives at the family's location: the export falls back to the family location.
+        Insuree.objects.filter(id=head.id).update(current_village=None)
+        self.assertEqual(Family.objects.get(id=head.family_id).location_id, municipality.id)
+        row = self._export_rows()["700000101"]
+        self.assertEqual(row["village"], "")
+        self.assertEqual(row["municipality"], municipality.name)
+        self.assertEqual(row["district"], municipality.parent.name)
+        self.assertEqual(row["region"], municipality.parent.parent.name)
+
+    def test_import_reports_a_row_with_unknown_locations_as_invalid(self):
+        gender = create_test_insuree(is_head=True, custom_props={"chf_id": "700000102"}).gender
+        good = {
+            "head_insuree_number": "700000110", "insuree_number": "700000110", "last_name": "Good",
+            "other_names": "Row", "dob": "1990-01-01", "sex": gender.code, **_location_columns(self.village),
+        }
+        bad = {
+            **good, "head_insuree_number": "700000111", "insuree_number": "700000111", "last_name": "Bad",
+            "village": "", "municipality": "", "district": "", "region": "No such region",
+        }
+        success, totals, errors = self.service.import_insurees(
+            _csv_file([good, bad]), dry_run=True, strategy=Strategy.INSERT)
+        self.assertFalse(success)
+        self.assertEqual(totals["sent"], 2, (totals, errors))
+        self.assertEqual(totals["invalid"], 1, (totals, errors))
+        self.assertEqual(totals["created"], 1, (totals, errors))
+        self.assertEqual(totals["failed"], 0, (totals, errors))
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("No such region", errors[0])
