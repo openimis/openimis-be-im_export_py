@@ -3,6 +3,7 @@ from typing import Tuple, Any, Dict, List
 from tablib import Dataset
 
 from im_export.resources import InsureeResource
+from insuree.models import Insuree
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,11 @@ class InsureeImportExportService:
         if export_format not in self.supported_content_types:
             raise ValueError(f'Non-supported export format: {export_format}')
 
+        # Only the insurees the user may see: the model owns that rule.
+        queryset = Insuree.get_queryset(self._resource.get_queryset(), self._user)
         # All supported formats match Tablib attrs, to update if that's not valid anymore
         return self.supported_content_types[export_format], \
-            getattr(self._resource.export(), export_format)
+            getattr(self._resource.export(queryset=queryset), export_format)
 
     def import_insurees(self, import_file, dry_run: bool = False, strategy: str = Strategy.INSERT) \
             -> Tuple[bool, Dict[str, int], List[str]]:

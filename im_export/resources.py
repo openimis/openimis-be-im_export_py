@@ -250,6 +250,11 @@ class InsureeResource(resources.ModelResource):
                 get_locations_ids(row, *self._locations_cache)
         except ValueError as e:
             raise ValidationError(str(e))
+        # The location lookup is by code or name, across the whole country: the
+        # village found must also be one the user may enrol insurees in.
+        if not Location.objects.is_allowed(self._user, [row['village_id']]):
+            raise ValidationError(_("Location %(village)s is outside your area")
+                                  % {"village": row['village']})
 
     def after_init_instance(self, instance, new, row, **kwargs):
         super().after_init_instance(instance, new, row, **kwargs)
@@ -258,6 +263,11 @@ class InsureeResource(resources.ModelResource):
         if not new and self.strategy == self.STRATEGY_INSERT:
             raise ValueError(_("Insuree %(insuree_number)s already exists") % {"insuree_number": row['insuree_number']})
         if not new:
+            # Insurees are matched by number across the whole country: an existing
+            # one is only updated when the user may see it.
+            if not Insuree.get_queryset(Insuree.objects.filter(id=instance.id), self._user).exists():
+                raise ValueError(_("Insuree %(insuree_number)s is outside your area")
+                                 % {"insuree_number": row['insuree_number']})
             family_head = instance.family.head_insuree.chf_id if instance.family_id else None
             if family_head != row['head_insuree_number']:
                 raise ValueError(_("Moving insuree %(insuree_number)s to another family is not supported")
@@ -274,9 +284,14 @@ class InsureeResource(resources.ModelResource):
             instance.current_village_id = row['village_id']
             instance.card_issued = False
             if not instance.head:
-                family = Family.objects.all().filter(validity_to__isnull=True) \
-                    .select_related('location') \
-                    .get(head_insuree__chf_id=row['head_insuree_number'])
+                # Only a family the user may see: the head number alone would attach
+                # the member to any family in the country.
+                families = Family.get_queryset(Family.objects.filter(validity_to__isnull=True), self._user)
+                family = families.select_related('location') \
+                    .filter(head_insuree__chf_id=row['head_insuree_number']).first()
+                if family is None:
+                    raise ValueError(_("Family of head insuree %(head_insuree_number)s not found")
+                                     % {"head_insuree_number": row['head_insuree_number']})
                 instance.family = family
                 # a member living at the family's location keeps no current_village
                 if family.location_id == row['village_id']:
